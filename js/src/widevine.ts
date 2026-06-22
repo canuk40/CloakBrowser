@@ -17,6 +17,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { getCacheDir } from "./config.js";
+
 const HINT_FILENAME = "latest-component-updated-widevine-cdm";
 
 /** True if `file` exists and is a regular file (mirrors Python's Path.is_file()). */
@@ -45,11 +47,14 @@ function seedingDisabled(): boolean {
 /**
  * Locate a sideloaded Widevine CDM directory, or null if absent.
  *
- * Resolution:
- *   - If CLOAKBROWSER_WIDEVINE_CDM is set, it is used exclusively (overrides
- *     auto-detection). An invalid value (no `manifest.json`) skips seeding.
- *   - Otherwise, `<dir of the chrome binary>/WidevineCdm` — where a user naturally
- *     drops it, and where it lives for both downloaded and CLOAKBROWSER_BINARY_PATH binaries.
+ * Resolution order:
+ *   1. If CLOAKBROWSER_WIDEVINE_CDM is set, it is used exclusively (overrides
+ *      auto-detection). An invalid value (no `manifest.json`) skips seeding.
+ *   2. `<dir of the chrome binary>/WidevineCdm` — a manual sideload, per version.
+ *   3. `<cache dir>/WidevineCdm` (`~/.cloakbrowser/WidevineCdm`) — the
+ *      version-independent location the Docker auto-fetch and fetch-widevine.py
+ *      write to. This fallback lets one fetched CDM serve any binary (free or
+ *      Pro, any version) with no env var — the CDM `.so` is arch- not version-specific.
  *
  * A directory counts only if it contains `manifest.json`. The returned path is
  * absolute and symlink-resolved (mirrors Python's Path.resolve()).
@@ -57,10 +62,20 @@ function seedingDisabled(): boolean {
  */
 export function resolveWidevineCdmDir(binaryPath: string): string | null {
   const custom = process.env.CLOAKBROWSER_WIDEVINE_CDM;
-  // `!== undefined` (not truthiness): a present-but-empty env var is "set" and
-  // used exclusively — it resolves to an invalid path and skips seeding.
-  const cdmDir = custom !== undefined ? custom : path.join(path.dirname(binaryPath), "WidevineCdm");
-  return isFile(path.join(cdmDir, "manifest.json")) ? realPath(cdmDir) : null;
+  if (custom !== undefined) {
+    // Set exclusively (overrides auto-detection). An empty/whitespace value is
+    // invalid — return null rather than let path.join("", ...) match a stray
+    // manifest.json in the working directory.
+    if (custom.trim() === "") return null;
+    return isFile(path.join(custom, "manifest.json")) ? realPath(custom) : null;
+  }
+  for (const cdmDir of [
+    path.join(path.dirname(binaryPath), "WidevineCdm"),
+    path.join(getCacheDir(), "WidevineCdm"),
+  ]) {
+    if (isFile(path.join(cdmDir, "manifest.json"))) return realPath(cdmDir);
+  }
+  return null;
 }
 
 /**

@@ -11,11 +11,13 @@ _HINT = "WidevineCdm/latest-component-updated-widevine-cdm"
 
 
 @pytest.fixture(autouse=True)
-def _force_linux(monkeypatch):
+def _force_linux(monkeypatch, tmp_path):
     """Run as if on Linux unless a test overrides it (seeding is Linux-only)."""
     monkeypatch.setattr(widevine.platform, "system", lambda: "Linux")
     monkeypatch.delenv("CLOAKBROWSER_WIDEVINE", raising=False)
     monkeypatch.delenv("CLOAKBROWSER_WIDEVINE_CDM", raising=False)
+    # Isolate the cache-root fallback from any real ~/.cloakbrowser on the host.
+    monkeypatch.setenv("CLOAKBROWSER_CACHE_DIR", str(tmp_path / "_isolated_cache"))
 
 
 def _make_cdm(dirpath):
@@ -113,12 +115,50 @@ def test_env_var_is_exclusive(tmp_path, monkeypatch):
     assert resolve_widevine_cdm_dir(binary) is None
 
 
+def test_resolve_falls_back_to_cache_root(tmp_path, monkeypatch):
+    """No CDM next to the binary -> auto-detect falls back to <cache>/WidevineCdm.
+
+    Simulates the Pro case: a Pro binary sits in its own chromium-<ver>-pro dir
+    with no adjacent CDM, while the Docker auto-fetch left one at the cache root.
+    """
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("CLOAKBROWSER_CACHE_DIR", str(cache))
+    cdm = _make_cdm(cache / "WidevineCdm")
+    pro_binary = tmp_path / "chromium-148.0-pro" / "chrome"
+    pro_binary.parent.mkdir(parents=True)  # binary dir exists, but has no CDM
+    assert resolve_widevine_cdm_dir(pro_binary) == cdm.resolve()
+
+
+def test_resolve_binary_dir_wins_over_cache_root(tmp_path, monkeypatch):
+    """A manual sideload next to the binary takes precedence over the cache root."""
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("CLOAKBROWSER_CACHE_DIR", str(cache))
+    _make_cdm(cache / "WidevineCdm")  # cache-root CDM present...
+    binary = _binary(tmp_path)
+    next_to = _make_cdm(binary.parent / "WidevineCdm")  # ...but sideload wins
+    assert resolve_widevine_cdm_dir(binary) == next_to.resolve()
+
+
+def test_seeds_hint_from_cache_root_fallback(tmp_path, monkeypatch):
+    """End-to-end: a cache-root CDM seeds the hint for a binary with none adjacent."""
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("CLOAKBROWSER_CACHE_DIR", str(cache))
+    cdm = _make_cdm(cache / "WidevineCdm")
+    profile = tmp_path / "profile"
+    seed_widevine_hint(profile, _binary(tmp_path))  # binary has no adjacent CDM
+    assert json.loads((profile / _HINT).read_text())["Path"] == str(cdm.resolve())
+
+
 def test_empty_env_var_is_exclusive(tmp_path, monkeypatch):
-    """An empty (but set) CLOAKBROWSER_WIDEVINE_CDM is exclusive — no binary-dir fallback."""
+    """An empty (but set) CLOAKBROWSER_WIDEVINE_CDM resolves to None — and must NOT
+    pick up a stray manifest.json in the working directory (``Path("")`` -> ``.``)."""
     binary = _binary(tmp_path)
     _make_cdm(binary.parent / "WidevineCdm")  # valid CDM next to binary
     monkeypatch.setenv("CLOAKBROWSER_WIDEVINE_CDM", "")
-    monkeypatch.chdir(tmp_path)  # so a stray ./manifest.json can't match
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    (cwd / "manifest.json").write_text("{}")  # stray manifest in CWD must be ignored
+    monkeypatch.chdir(cwd)
     assert resolve_widevine_cdm_dir(binary) is None
 
 

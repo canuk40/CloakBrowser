@@ -35,6 +35,8 @@ beforeEach(() => {
   setPlatform("linux"); // seeding is Linux-only; default to Linux in tests
   delete process.env.CLOAKBROWSER_WIDEVINE;
   delete process.env.CLOAKBROWSER_WIDEVINE_CDM;
+  // Isolate the cache-root fallback from any real ~/.cloakbrowser on the host.
+  process.env.CLOAKBROWSER_CACHE_DIR = tmpDir("cloak-cache-");
 });
 
 afterEach(() => {
@@ -42,6 +44,7 @@ afterEach(() => {
   Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
   delete process.env.CLOAKBROWSER_WIDEVINE;
   delete process.env.CLOAKBROWSER_WIDEVINE_CDM;
+  delete process.env.CLOAKBROWSER_CACHE_DIR;
   for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -66,6 +69,25 @@ describe("resolveWidevineCdmDir", () => {
     expect(resolveWidevineCdmDir(binary)).toBe(fs.realpathSync(cdm));
   });
 
+  it("falls back to <cache dir>/WidevineCdm when none next to the binary (Pro case)", () => {
+    const cache = tmpDir("cloak-cacheroot-");
+    process.env.CLOAKBROWSER_CACHE_DIR = cache;
+    const cdm = makeCdm(path.join(cache, "WidevineCdm"));
+    // Pro binary in its own dir with no adjacent CDM.
+    const proBin = path.join(tmpDir("cloak-pro-"), "chromium-148.0-pro");
+    fs.mkdirSync(proBin, { recursive: true });
+    expect(resolveWidevineCdmDir(path.join(proBin, "chrome"))).toBe(fs.realpathSync(cdm));
+  });
+
+  it("binary-dir CDM wins over the cache-root fallback", () => {
+    const cache = tmpDir("cloak-cacheroot-");
+    process.env.CLOAKBROWSER_CACHE_DIR = cache;
+    makeCdm(path.join(cache, "WidevineCdm")); // cache-root CDM present...
+    const binary = fakeBinary();
+    const nextTo = makeCdm(path.join(path.dirname(binary), "WidevineCdm")); // ...sideload wins
+    expect(resolveWidevineCdmDir(binary)).toBe(fs.realpathSync(nextTo));
+  });
+
   it("env var is exclusive — invalid env skips, no fallback to binary dir", () => {
     const binary = fakeBinary();
     makeCdm(path.join(path.dirname(binary), "WidevineCdm")); // valid CDM next to binary
@@ -75,7 +97,10 @@ describe("resolveWidevineCdmDir", () => {
     expect(resolveWidevineCdmDir(binary)).toBeNull();
   });
 
-  it("empty env var is exclusive — no fallback to binary dir", () => {
+  it("empty env var resolves to null (exclusive, never scans the working dir)", () => {
+    // The empty check returns null before any path.join/isFile, so a stray
+    // ./manifest.json can't be matched. (The CWD-ignore case is proven in the
+    // Python suite; vitest workers don't allow process.chdir to simulate it here.)
     const binary = fakeBinary();
     makeCdm(path.join(path.dirname(binary), "WidevineCdm")); // valid CDM next to binary
     process.env.CLOAKBROWSER_WIDEVINE_CDM = ""; // set but empty

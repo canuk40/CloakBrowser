@@ -426,26 +426,31 @@ Supports all the same options as `launch_context()`: `proxy`, `user_agent`, `vie
 
 Async version: `launch_persistent_context_async()`.
 
-**Storage quota and detection tradeoff:** By default, the binary normalizes storage quota to pass FingerprintJS, which blocks persistent contexts that report non-incognito quota values. This means detection services that penalize incognito mode (like BrowserScan's `notPrivate` check, -10 points) will still flag it. If your target site penalizes incognito but doesn't use FingerprintJS, set a higher quota to appear as a regular profile:
+**Storage quota and incognito detection:** the binary normalizes storage quota by default (this also hides the real disk size). Detectors that infer private/incognito mode from quota — e.g. BrowserScan's incognito check (−10%) — read the default as incognito. Raise it to present as a regular profile:
 
 ```python
 ctx = launch_persistent_context("./my-profile", args=["--fingerprint-storage-quota=5000"])
 ```
 
-| Quota setting | FingerprintJS | BrowserScan `notPrivate` |
-|---|---|---|
-| Default (auto, ~500MB) | PASS | -10 (flagged as incognito) |
-| `--fingerprint-storage-quota=5000` | May trigger detection | PASS (appears non-incognito) |
-
 ### Widevine / DRM
 
-The binary is built with Widevine support, but the Widevine CDM is a proprietary Google component we can't redistribute. Sideload it once by copying a `WidevineCdm/` directory from a real Chrome install next to the binary (full steps in [#96](https://github.com/CloakHQ/CloakBrowser/issues/96)):
+The binary is built with Widevine support, but the Widevine CDM is a proprietary Google component we can't redistribute. Get it one of two ways (full background in [#96](https://github.com/CloakHQ/CloakBrowser/issues/96)):
+
+**Fetch it** — no Chrome install needed; pulls the CDM from Google's component server (Linux x86-64 only; SHA-256 + CRX3-signature verified). It lands at `~/.cloakbrowser/WidevineCdm`, which the wrapper auto-detects — no env var needed:
+
+```bash
+python3 bin/fetch-widevine.py
+```
+
+**Or copy it** from an existing Chrome install, next to the binary:
 
 ```bash
 cp -r /opt/google/chrome/WidevineCdm ~/.cloakbrowser/chromium-<version>/WidevineCdm
 ```
 
-With the CDM in place, `launch_persistent_context()` enables Widevine **on the first launch** — the wrapper auto-writes the CDM hint file into the profile, so you don't need the manual two-launch workaround. This lets you play DRM-protected video (e.g. Netflix, Spotify Web) and makes a persistent profile present as a regular Chrome install to detection services that probe for DRM/EME support as a real-browser signal.
+(In Docker, just pass `-e CLOAKBROWSER_FETCH_WIDEVINE=1` — the entrypoint runs the fetch automatically; see the Docker note below.)
+
+With the CDM in place, `launch_persistent_context()` enables Widevine **on the first launch** — the wrapper auto-writes the CDM hint file into the profile, so you don't need the manual two-launch workaround. This lets you play DRM-protected video (e.g. Netflix, Spotify Web).
 
 ```python
 from cloakbrowser import launch_persistent_context
@@ -456,6 +461,7 @@ ctx = launch_persistent_context("./my-profile", headless=False)
 
 - **Linux only.** Chromium's hint-file mechanism is Linux/ChromeOS-specific. On Windows the CDM can't initialise (DRM host verification) and macOS uses a different layout, so seeding is a no-op there.
 - **Auto by presence.** No flag needed — a sideloaded CDM is the opt-in. Point at a CDM in a non-default location with `CLOAKBROWSER_WIDEVINE_CDM=/path/to/WidevineCdm`, or disable seeding entirely with `CLOAKBROWSER_WIDEVINE=0`.
+- **Docker — auto-fetch (opt-in).** No Chrome to copy from inside the image, so the official image can fetch the CDM for you. Run with `-e CLOAKBROWSER_FETCH_WIDEVINE=1` and it pulls the CDM from Google's component server (the same source Chrome uses) on first launch, caches it at `~/.cloakbrowser/WidevineCdm` in the mounted volume, where the wrapper auto-detects it — for free or Pro binaries, and for `docker exec`'d scripts alike. **Off by default** — no network call unless you opt in — and best-effort, so a failed fetch never blocks launch. The download is signature- and checksum-verified before install. Bare-metal Linux users can run the same fetcher directly: `python3 bin/fetch-widevine.py` (pip-only installs can grab that one self-contained file from the repo).
 
 ### CLI
 
@@ -645,6 +651,7 @@ Access the original un-patched Playwright page at `page._original` if you need r
 | `CLOAKBROWSER_GEOIP_TIMEOUT_SECONDS` | `5` | Max seconds for GeoIP resolution before continuing without it |
 | `CLOAKBROWSER_WIDEVINE_CDM` | — | Path to a sideloaded `WidevineCdm` directory (overrides auto-detection next to the binary). See [Widevine / DRM](#widevine--drm) |
 | `CLOAKBROWSER_WIDEVINE` | `1` | Set to `0` to disable automatic Widevine hint-file seeding for persistent contexts |
+| `CLOAKBROWSER_FETCH_WIDEVINE` | `0` | Docker only: set to `1` to auto-fetch the Widevine CDM on container start (Linux x86-64 only). See [Widevine / DRM](#widevine--drm) |
 
 ## Fingerprint Management
 
@@ -704,7 +711,7 @@ Supported by the binary but **not set by default** — pass via `args` to custom
 | `--fingerprint-storage-quota` | Override storage quota in MB — affects `storage.estimate()`, `storageBuckets`, and legacy webkit APIs. Auto-normalized when `--fingerprint` is set |
 | `--fingerprint-taskbar-height` | Override taskbar height (binary defaults: Win=48, Mac=95, Linux=0) |
 | `--fingerprint-fonts-dir` | Path to directory containing target-platform fonts (see [Font Setup on Linux](#font-setup-on-linux)) |
-| `--fingerprint-windows-font-metrics` | Align font metrics with the Windows platform when spoofing Windows on Linux — used in the [FingerprintJS config](#detected-by-fingerprintjs). Requires Windows fonts installed (see [Font Setup on Linux](#font-setup-on-linux)); no effect without them |
+| `--fingerprint-windows-font-metrics` | **Chromium 148+ binary only** (no-op on earlier builds). Align font metrics with the Windows platform when spoofing Windows on Linux — used in the [FingerprintJS config](#detected-by-fingerprintjs). Requires Windows fonts installed (see [Font Setup on Linux](#font-setup-on-linux)); no effect without them |
 | `--fingerprint-webrtc-ip` | WebRTC ICE candidate IP replacement. Use `auto` to resolve from proxy exit IP (makes an HTTP call through the proxy), or pass an explicit IP. Auto-injected when `geoip=True` |
 | `--fingerprint-noise=false` | Disable noise injection (canvas, WebGL, audio, client rects) while keeping the deterministic fingerprint seed active |
 | `--enable-blink-features=FakeShadowRoot` | Access closed shadow DOM elements |
@@ -992,6 +999,8 @@ ctx.close()
 
 Run again with the same volume — cookies, localStorage, and cache are restored automatically.
 
+To enable Widevine DRM (Netflix, Spotify Web, etc.) in a persistent profile, add `-e CLOAKBROWSER_FETCH_WIDEVINE=1` to auto-fetch the CDM on first launch (see [Widevine / DRM](#widevine--drm)); it caches in the mounted volume.
+
 **Resource usage:** ~190MB RAM idle, ~280MB with 3 tabs. ~30MB per additional tab.
 
 ### Extend with your own image
@@ -1090,13 +1099,12 @@ FingerprintJS (`demo.fingerprint.com/playground`) checks multiple signals. Each 
 
 | Detection | Cause | Fix |
 |-----------|-------|-----|
-| **`nodriver` / bad bot** | IP reputation or missing flags | Residential proxy + config below |
+| **`nodriver` / bad bot** | Persistent profile without a Widevine CDM, or poor proxy IP reputation | Residential proxy; for **persistent** contexts add a Widevine CDM (Docker: `-e CLOAKBROWSER_FETCH_WIDEVINE=1`, otherwise sideload — see [Widevine / DRM](#widevine--drm)). Regular `launch()` doesn't need it. |
 | **Browser tampering** | Noise injection detected by ML | `--fingerprint-noise=false` |
-| **Browser tampering** (fonts) | Font metrics don't match the spoofed Windows platform | `--fingerprint-windows-font-metrics` (requires Windows fonts installed) |
+| **Browser tampering** (fonts) | Font metrics don't match the spoofed Windows platform | `--fingerprint-windows-font-metrics` (Chromium 148+ binary; requires [Windows fonts installed](#font-setup-on-linux)) |
 | **Virtual machine** | Screen dimensions don't match viewport | `--fingerprint-screen-width/height` matching viewport |
-| **Incognito** | Storage quota normalized to ~500MB | Expected tradeoff — see below |
 
-Config that passes FPJS (verified on v0.3.30, Linux + Windows):
+Config that passes FPJS on the latest binary (Linux, residential proxy):
 
 ```python
 browser = launch(
@@ -1105,7 +1113,7 @@ browser = launch(
     geoip=True,
     args=[
         "--fingerprint-noise=false",          # prevents tampering detection
-        "--fingerprint-windows-font-metrics", # align font metrics (requires Windows fonts)
+        "--fingerprint-windows-font-metrics", # align font metrics — 148+ binary, needs Windows fonts
     ],
 )
 ```
@@ -1117,16 +1125,14 @@ const browser = await launch({
     geoip: true,
     args: [
         '--fingerprint-noise=false',
-        '--fingerprint-windows-font-metrics',  // align font metrics (requires Windows fonts)
+        '--fingerprint-windows-font-metrics',  // align font metrics — 148+ binary, needs Windows fonts
     ],
 });
 ```
 
-For persistent contexts (`launch_persistent_context` / `launchPersistentContext`), also add `--fingerprint-storage-quota=500` to the args.
+Requires a **Chromium 148+ binary** and **Windows fonts** installed (see [Font Setup on Linux](#font-setup-on-linux)); run with a **residential proxy** and `geoip=True`.
 
-**Storage quota tradeoff:** The binary normalizes storage quota to ~500MB to pass FPJS, but this makes the session look like incognito to other detection services (e.g. BrowserScan's `notPrivate` check, -10 points). Setting `--fingerprint-storage-quota=5000` passes incognito checks but may trigger FPJS. With quota alone you can't satisfy both — choose based on what your target site checks. See the [storage quota tradeoff table](#launch_persistent_context) for details.
-
-**Resolving the tradeoff (Linux):** Sideloading the Widevine CDM lets a persistent context pass FPJS at a higher quota, so you can satisfy both at once. See [Widevine / DRM](#widevine--drm).
+**Persistent contexts** (`launch_persistent_context` / `launchPersistentContext`) need one extra piece beyond the `launch()` config above — a working **Widevine CDM** (Docker: `-e CLOAKBROWSER_FETCH_WIDEVINE=1`; otherwise sideload — see [Widevine / DRM](#widevine--drm)). Storage-quota tuning is unrelated to FingerprintJS here; it only affects detectors that infer incognito from quota, such as BrowserScan (see [storage quota](#launch_persistent_context)).
 
 ---
 

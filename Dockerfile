@@ -39,7 +39,8 @@ RUN python -c "from cloakbrowser import ensure_binary; ensure_binary()" \
 # CLI shortcuts
 COPY bin/cloaktest /usr/local/bin/cloaktest
 COPY bin/cloakserve /usr/local/bin/cloakserve
-RUN chmod +x /usr/local/bin/cloaktest /usr/local/bin/cloakserve
+COPY bin/fetch-widevine.py /usr/local/bin/fetch-widevine.py
+RUN chmod +x /usr/local/bin/cloaktest /usr/local/bin/cloakserve /usr/local/bin/fetch-widevine.py
 
 EXPOSE 9222
 

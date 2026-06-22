@@ -43,22 +43,38 @@ def _seeding_disabled() -> bool:
 def resolve_widevine_cdm_dir(binary_path: str | os.PathLike) -> Path | None:
     """Locate a sideloaded Widevine CDM directory, or None if absent.
 
-    Resolution:
-      - If CLOAKBROWSER_WIDEVINE_CDM is set, it is used **exclusively** (overrides
-        auto-detection). An invalid value (no ``manifest.json``) skips seeding.
-      - Otherwise, ``<dir of the chrome binary>/WidevineCdm`` — where a user
-        naturally drops it, and where it ends up for both downloaded and
-        CLOAKBROWSER_BINARY_PATH (local build / Docker mount) binaries.
+    Resolution order:
+      1. If CLOAKBROWSER_WIDEVINE_CDM is set, it is used **exclusively** (overrides
+         auto-detection). An invalid value (no ``manifest.json``) skips seeding.
+      2. ``<dir of the chrome binary>/WidevineCdm`` — where a user naturally drops
+         a manual sideload, per Chromium binary version.
+      3. ``<cache dir>/WidevineCdm`` (``~/.cloakbrowser/WidevineCdm``) — the
+         version-independent location the Docker auto-fetch and ``fetch-widevine.py``
+         write to. This fallback lets one fetched CDM serve any binary (free or
+         Pro, any version) with no env var — the CDM ``.so`` is arch-specific but
+         not version-specific.
 
     A directory counts only if it contains ``manifest.json`` (so we don't seed a
     hint pointing at a bogus path). The returned path is absolute and
     symlink-resolved (``Path.resolve()``).
     """
     custom = os.environ.get("CLOAKBROWSER_WIDEVINE_CDM")
-    # `is not None` (not truthiness): a present-but-empty env var is "set" and
-    # used exclusively — it resolves to an invalid path and skips seeding.
-    cdm_dir = Path(custom) if custom is not None else Path(os.fspath(binary_path)).parent / "WidevineCdm"
-    return cdm_dir.resolve() if (cdm_dir / "manifest.json").is_file() else None
+    if custom is not None:
+        # Set exclusively (overrides auto-detection). An empty/whitespace value is
+        # invalid — return None rather than let Path("") resolve to "." and match a
+        # stray manifest.json in the working directory.
+        if not custom.strip():
+            return None
+        cdm_dir = Path(custom)
+        return cdm_dir.resolve() if (cdm_dir / "manifest.json").is_file() else None
+
+    from .config import get_cache_dir  # local import avoids any import-cycle risk
+
+    for cdm_dir in (Path(os.fspath(binary_path)).parent / "WidevineCdm",
+                    get_cache_dir() / "WidevineCdm"):
+        if (cdm_dir / "manifest.json").is_file():
+            return cdm_dir.resolve()
+    return None
 
 
 def seed_widevine_hint(user_data_dir: str | os.PathLike, binary_path: str | os.PathLike) -> None:
