@@ -16,7 +16,7 @@ from pathlib import Path
 
 import httpx
 
-from .config import get_cache_dir
+from .config import get_cache_dir, get_platform_tag
 
 logger = logging.getLogger("cloakbrowser")
 
@@ -101,7 +101,7 @@ def get_pro_latest_version() -> str | None:
 
     Rate-limited to 1 call per hour via a marker file.
     """
-    marker = get_cache_dir() / ".last_pro_version_check"
+    marker = get_cache_dir() / f".last_pro_version_check_{get_platform_tag()}"
 
     if marker.exists():
         try:
@@ -113,7 +113,11 @@ def get_pro_latest_version() -> str | None:
             pass
 
     try:
-        resp = httpx.get(PRO_VERSION_URL, timeout=10.0)
+        resp = httpx.get(
+            PRO_VERSION_URL,
+            headers={"X-Platform": get_platform_tag()},
+            timeout=10.0,
+        )
         resp.raise_for_status()
         version = resp.json().get("version")
         if not version:

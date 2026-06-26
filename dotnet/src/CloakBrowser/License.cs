@@ -26,7 +26,9 @@ public static class License
     private const double LicenseCacheTtl = 86400;
     private const double ProVersionCheckInterval = 3600;
 
-    private static readonly HttpClient Http = CreateHttpClient();
+    // Not readonly so tests can swap in an HttpClient backed by a recording
+    // handler to exercise the real request path (header, etc.) without network.
+    internal static HttpClient Http = CreateHttpClient();
 
     private static HttpClient CreateHttpClient()
     {
@@ -137,7 +139,7 @@ public static class License
         if (ProLatestVersionOverride != null)
             return ProLatestVersionOverride();
 
-        var marker = Path.Combine(Config.GetCacheDir(), ".last_pro_version_check");
+        var marker = Path.Combine(Config.GetCacheDir(), $".last_pro_version_check_{Config.GetPlatformTag()}");
 
         if (File.Exists(marker))
         {
@@ -155,7 +157,9 @@ public static class License
 
         try
         {
-            using var resp = Http.GetAsync(ProVersionUrl).GetAwaiter().GetResult();
+            using var req = new HttpRequestMessage(HttpMethod.Get, ProVersionUrl);
+            req.Headers.Add("X-Platform", Config.GetPlatformTag());
+            using var resp = Http.SendAsync(req).GetAwaiter().GetResult();
             resp.EnsureSuccessStatusCode();
             var json = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
             using var doc = JsonDocument.Parse(json);

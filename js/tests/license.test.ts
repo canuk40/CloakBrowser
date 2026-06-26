@@ -277,8 +277,24 @@ describe("getProLatestVersion", () => {
     expect(version).toBe("147.0.1234.5");
   });
 
+  it("sends X-Platform header", async () => {
+    vi.spyOn(config, "getPlatformTag").mockReturnValue("darwin-arm64");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ version: "147.0.1234.5" }),
+    } as Response);
+
+    await getProLatestVersion();
+
+    const init = fetchSpy.mock.calls[0]![1] as RequestInit;
+    expect((init.headers as Record<string, string>)["X-Platform"]).toBe(
+      "darwin-arm64",
+    );
+  });
+
   it("rate limited by marker file", async () => {
-    const marker = path.join(tmpDir, ".last_pro_version_check");
+    vi.spyOn(config, "getPlatformTag").mockReturnValue("darwin-arm64");
+    const marker = path.join(tmpDir, ".last_pro_version_check_darwin-arm64");
     fs.writeFileSync(marker, "147.0.1234.5");
 
     const fetchSpy = vi.spyOn(globalThis, "fetch");

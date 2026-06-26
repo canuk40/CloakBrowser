@@ -1,8 +1,13 @@
 using System;
 using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using CloakBrowser;
 using Xunit;
 
@@ -203,7 +208,7 @@ public class LicenseTests : IDisposable
     [Fact]
     public void ProLatestVersion_rate_limited_reads_marker()
     {
-        var marker = Path.Combine(_tmp, ".last_pro_version_check");
+        var marker = Path.Combine(_tmp, $".last_pro_version_check_{Config.GetPlatformTag()}");
         File.WriteAllText(marker, "148.0.7778.215.2");
         // Fresh marker (just written) -> returns cached value without server.
         Assert.Equal("148.0.7778.215.2", License.GetProLatestVersion());
@@ -214,6 +219,48 @@ public class LicenseTests : IDisposable
     {
         License.ProLatestVersionOverride = () => "149.0.0.0";
         Assert.Equal("149.0.0.0", License.GetProLatestVersion());
+    }
+
+    [Fact]
+    public void ProLatestVersion_sends_platform_header()
+    {
+        // Exercise the real SendAsync path (no override) via a recording handler.
+        var recorder = new RecordingHandler("{\"version\":\"147.0.1234.5\"}");
+        var original = License.Http;
+        License.Http = new HttpClient(recorder);
+        try
+        {
+            var version = License.GetProLatestVersion();
+            Assert.Equal("147.0.1234.5", version);
+            Assert.Equal(Config.GetPlatformTag(), recorder.LastPlatform);
+        }
+        finally
+        {
+            License.Http.Dispose();
+            License.Http = original;
+        }
+    }
+
+    /// <summary>Captures the X-Platform header off the outgoing request and returns a canned body.</summary>
+    private sealed class RecordingHandler : HttpMessageHandler
+    {
+        private readonly string _body;
+        public string? LastPlatform { get; private set; }
+
+        public RecordingHandler(string body) => _body = body;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            // Read the header value here — `request` is disposed by the caller after the call.
+            LastPlatform = request.Headers.TryGetValues("X-Platform", out var values)
+                ? values.FirstOrDefault()
+                : null;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(_body),
+            });
+        }
     }
 
     // =======================================================================

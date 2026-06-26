@@ -269,13 +269,33 @@ class TestGetProLatestVersion:
 
         assert version == "147.0.1234.5"
 
+    def test_sends_platform_header(self, tmp_path):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"version": "147.0.1234.5"}
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("cloakbrowser.license.get_cache_dir", return_value=tmp_path):
+            with patch(
+                "cloakbrowser.license.get_platform_tag", return_value="darwin-arm64"
+            ):
+                with patch(
+                    "cloakbrowser.license.httpx.get", return_value=mock_resp
+                ) as mock_get:
+                    get_pro_latest_version()
+
+        _, kwargs = mock_get.call_args
+        assert kwargs["headers"]["X-Platform"] == "darwin-arm64"
+
     def test_rate_limited(self, tmp_path):
-        marker = tmp_path / ".last_pro_version_check"
+        marker = tmp_path / ".last_pro_version_check_darwin-arm64"
         marker.write_text("147.0.1234.5")
 
         with patch("cloakbrowser.license.get_cache_dir", return_value=tmp_path):
-            with patch("cloakbrowser.license.httpx.get") as mock_get:
-                version = get_pro_latest_version()
+            with patch(
+                "cloakbrowser.license.get_platform_tag", return_value="darwin-arm64"
+            ):
+                with patch("cloakbrowser.license.httpx.get") as mock_get:
+                    version = get_pro_latest_version()
 
         mock_get.assert_not_called()
         assert version == "147.0.1234.5"

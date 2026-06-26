@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { getCacheDir } from "./config.js";
+import { getCacheDir, getPlatformTag } from "./config.js";
 
 const VALIDATE_URL = "https://cloakbrowser.dev/api/license/validate";
 const PRO_VERSION_URL = "https://cloakbrowser.dev/api/download/version";
@@ -102,7 +102,10 @@ export async function validateLicense(licenseKey: string): Promise<LicenseInfo |
  * Rate-limited to 1 call per hour via a marker file.
  */
 export async function getProLatestVersion(): Promise<string | null> {
-  const marker = path.join(getCacheDir(), ".last_pro_version_check");
+  const marker = path.join(
+    getCacheDir(),
+    `.last_pro_version_check_${getPlatformTag()}`,
+  );
 
   try {
     if (fs.existsSync(marker)) {
@@ -119,6 +122,7 @@ export async function getProLatestVersion(): Promise<string | null> {
 
   try {
     const resp = await fetch(PRO_VERSION_URL, {
+      headers: { "X-Platform": getPlatformTag() },
       signal: AbortSignal.timeout(10_000),
     });
 
